@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "479856845671",
+    "project_id": "api-app-cb3ff",
+    "storage_bucket": "api-app-cb3ff.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:479856845671:android:9fbf15dd53d2adb9d005c2",
+        "android_client_info": {
+          "package_name": "com.example.api_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDAu91tgJBb8iPCTJDLq0MQdadSOUQeYPo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
