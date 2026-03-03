@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // for compute()
 import '../models/dish.dart';
 import '../services/dish_service.dart';
 import '../services/firebase_service.dart';
@@ -19,7 +22,11 @@ class _DishMenuScreenState extends State<DishMenuScreen> {
 
   // search
   List<Dish>? _allDishes;
+  List<Dish> _visibleDishes = [];
+  List<Map<String, dynamic>>? _rawDishes;
+  bool _isFiltering = false;
   String _searchQuery = '';
+  Timer? _debounce;
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -28,8 +35,17 @@ class _DishMenuScreenState extends State<DishMenuScreen> {
     _loadDishes();
   }
 
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
   void _loadDishes() {
     _allDishes = null;
+    _rawDishes = null;
+    _visibleDishes = [];
     if (_useFirestore) {
       _futureDishes = _firebase.fetchDishesFromFirestore();
     } else {
@@ -83,9 +99,7 @@ class _DishMenuScreenState extends State<DishMenuScreen> {
                 border: OutlineInputBorder(),
               ),
               onChanged: (val) {
-                setState(() {
-                  _searchQuery = val;
-                });
+                _onSearchChanged(val);
               },
             ),
           ),
@@ -109,17 +123,14 @@ class _DishMenuScreenState extends State<DishMenuScreen> {
                 } else if (snapshot.hasData) {
                   final dishes = snapshot.data!;
                   // cache full list once
-                  _allDishes ??= dishes;
-                  final visible = _searchQuery.isEmpty
-                      ? _allDishes!
-                      : _allDishes!
-                            .where(
-                              (d) => d.name.toLowerCase().contains(
-                                _searchQuery.toLowerCase(),
-                              ),
-                            )
-                            .toList();
-                  if (visible.isEmpty) {
+                  if (_allDishes == null) {
+                    _allDishes = dishes;
+                    _applyFilter();
+                  }
+                  if (_isFiltering) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (_visibleDishes.isEmpty) {
                     return const Center(child: Text('Không tìm thấy món ăn'));
                   }
                   return GridView.builder(
@@ -131,9 +142,9 @@ class _DishMenuScreenState extends State<DishMenuScreen> {
                           crossAxisSpacing: 8,
                           childAspectRatio: 0.75,
                         ),
-                    itemCount: visible.length,
+                    itemCount: _visibleDishes.length,
                     itemBuilder: (context, index) {
-                      final dish = visible[index];
+                      final dish = _visibleDishes[index];
                       return Card(
                         elevation: 2,
                         shape: RoundedRectangleBorder(
@@ -245,6 +256,64 @@ class _DishMenuScreenState extends State<DishMenuScreen> {
         ],
       ), // close Column
     );
+  }
+
+  /// Called when the search query or source list changes. Sends a small
+  /// message to a background isolate to perform filtering so the UI thread is
+  /// not blocked when the list is large.
+  void _filterInBackground() {
+    if (_allDishes == null) return;
+
+    setState(() => _isFiltering = true);
+
+    // convert to maps because custom objects cannot be sent across isolates
+    final raw = _allDishes!.map((d) => d.toMap()).toList();
+    compute(_filterIsolate, {'dishes': raw, 'query': _searchQuery}).then((
+      List<Map<String, dynamic>> resultMaps,
+    ) {
+      setState(() {
+        _visibleDishes = resultMaps
+            .map((m) => Dish.fromMap(m))
+            .toList(growable: false);
+        _isFiltering = false;
+      });
+    });
+  }
+
+  /// Applies filter immediately when the list is first loaded.
+  void _applyFilter() {
+    _filterInBackground();
+  }
+
+  /// Called when search field changes. Debounces input so that we do not
+  /// repeatedly spawn isolates on every keystroke, and updates query state.
+  void _onSearchChanged(String val) {
+    _searchQuery = val;
+    _debounce?.cancel();
+    // wait 300ms after user stops typing before filtering
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      _filterInBackground();
+    });
+  }
+
+  /// The actual filtering logic executed in the isolate. Input is a map with
+  /// 'dishes' (list of maps) and 'query' (string). Returns a filtered list of
+  /// maps.
+  static List<Map<String, dynamic>> _filterIsolate(
+    Map<String, dynamic> params,
+  ) {
+    final List raw = params['dishes'] as List;
+    final String q = (params['query'] as String).toLowerCase();
+
+    if (q.isEmpty) {
+      // cast to satisfy return type
+      return raw.cast<Map<String, dynamic>>();
+    }
+
+    return raw
+        .cast<Map<String, dynamic>>()
+        .where((m) => (m['name']?.toString().toLowerCase() ?? '').contains(q))
+        .toList();
   }
 
   Widget _buildError(String message) {

@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/dish.dart';
 
@@ -17,25 +18,26 @@ class FirebaseService {
     }
   }
 
+  /// Helper executed in an isolate to convert raw maps into Dish objects.
+  static List<Dish> _mapListToDishes(List<Map<String, dynamic>> raw) {
+    return raw.map((data) => Dish.fromMap(data)).toList();
+  }
+
   /// Fetch a list of dishes stored in the `menu` collection.
   ///
   /// Documents are expected to contain `name` and `imageUrl` fields.
-  /// This method maps each document to a [Dish] model defined in
-  /// `lib/models/dish.dart`.
+  /// The map-to-model conversion is offloaded to a background isolate so that
+  /// a large collection does not block the UI thread.
   Future<List<Dish>> fetchDishesFromFirestore() async {
     try {
       final snapshot = await _firestore.collection('menu').get();
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        return Dish(
-          name: data['name']?.toString() ?? '',
-          imageUrl: data['imageUrl']?.toString() ?? '',
-          description: data['description']?.toString() ?? '',
-          price: int.tryParse(data['price']?.toString() ?? '') ?? 0,
-          isAvaiable: data['isAvaiable'] == true,
-          category: data['category']?.toString() ?? '',
-        );
-      }).toList();
+      // convert documents to simple maps first (maps are sendable across
+      // isolates), then use compute() to do the heavy mapping work.
+      final rawData = snapshot.docs
+          .map((doc) => doc.data())
+          .cast<Map<String, dynamic>>()
+          .toList();
+      return await compute(_mapListToDishes, rawData);
     } catch (e) {
       // Cloud Firestore throws PlatformException-like errors; permission denied
       // is common when the database rules are restrictive.  Wrap with a
